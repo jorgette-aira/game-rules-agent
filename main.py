@@ -6,14 +6,28 @@ from flask import Flask
 from PyPDF2 import PdfReader
 from google import genai
 from google.genai import types
+import chromadb.utils.embedding_functions as embedding_functions
 
-# Setting up API Key
-os.environ["GEMINI_API_KEY"] = "YOUR_GEMINI_KEY"
-client = genai.Client()
+# ---------------------------------------------------------
+# 1. API KEYS & SETUP
+# ---------------------------------------------------------
+# Pull the real keys securely from Render's Environment Variables
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 
-# Initialize local database
+client = genai.Client(api_key=GEMINI_KEY)
+
+# Tell Chroma to use Google's servers so Render doesn't run out of memory!
+gemini_ef = embedding_functions.GoogleGenerativeAiEmbeddingFunction(
+    api_key=GEMINI_KEY
+)
+
+# Initialize local database with the Gemini embedding function
 chroma_client = chromadb.Client()
-collection = chroma_client.get_or_create_collection(name="game_rules")
+collection = chroma_client.get_or_create_collection(
+    name="game_rules",
+    embedding_function=gemini_ef
+)
 
 # ---------------------------------------------------------
 # 2. DATA INGESTION: Read PDF and Chunk the Text
@@ -22,14 +36,12 @@ def load_pdf_to_db(pdf_path: str):
     print(f"Loading and chunking {pdf_path}...")
     reader = PdfReader(pdf_path)
     
-    # 1. Extract ALL text from the PDF into one giant string
     full_text = ""
     for page in reader.pages:
         text = page.extract_text()
         if text:
             full_text += text + "\n"
             
-    # 2. Slice the text into chunks
     chunk_size = 800
     overlap = 100
     chunks = []
@@ -38,11 +50,9 @@ def load_pdf_to_db(pdf_path: str):
     while start < len(full_text):
         end = start + chunk_size
         chunks.append(full_text[start:end])
-        start += chunk_size - overlap # Move forward, but leave an overlap
+        start += chunk_size - overlap 
         
-    # 3. Add chunks to the database
     if chunks:
-        # Generate a unique ID for every chunk (chunk_0, chunk_1, etc.)
         ids = [f"chunk_{i}" for i in range(len(chunks))]
         collection.add(
             documents=chunks,
@@ -50,8 +60,6 @@ def load_pdf_to_db(pdf_path: str):
         )
     print(f"Successfully loaded {len(chunks)} chunks into the database!\n")
 
-# Important: We need to clear the old "page" data before loading the new chunks.
-# Add this line right above load_pdf_to_db("rules.pdf")
 existing_ids = collection.get()['ids']
 if existing_ids:
     collection.delete(ids=existing_ids)
@@ -66,26 +74,22 @@ def search_game_rules(query: str) -> str:
     
     results = collection.query(
         query_texts=[query], 
-        n_results=3 # Grab the top 3 chunks instead of 1
+        n_results=3 
     )
     
     if results['documents'] and results['documents'][0]:
-        # Stitch the 3 chunks together with a divider so the AI can read them all
         combined_results = "\n\n---NEXT EXCERPT---\n\n".join(results['documents'][0])
         return combined_results
         
     return "No relevant rules found."
 
 # ---------------------------------------------------------
-# ---------------------------------------------------------
 # 4. THE AGENT: Connecting the LLM to the Tool
 # ---------------------------------------------------------
-# We update the system instruction to explicitly tell the agent to use its memory
 system_prompt = (
     "You are Paul a helpful game referee. Always use the search_game_rules tool to answer questions. "
-    "CRITICAL: If the user asks a vague follow-up question (e.g., 'What about round 2?'), "
-    "use the context of the conversation history to write a highly specific, complete search query "
-    "for the tool (e.g., 'rolling a 7 in round 2 rules'). "
+    "CRITICAL: If the user asks a vague follow-up question, "
+    "use the context of the conversation history to write a highly specific, complete search query. "
     "Please format your answers cleanly using Markdown. Use **bold text** for important roles or rules, and bullet points for lists."
 )
 
@@ -99,30 +103,21 @@ chat = client.chats.create(
 )
 
 # ---------------------------------------------------------
-# 5. THE PROTOTYPE LOOP: Talk to your Agent (Now with Streaming!)
+# 5. THE PROTOTYPE LOOP
 # ---------------------------------------------------------
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+bot = telebot.TeleBot(TG_TOKEN)
 
 print("Connecting to Telegram...")
 
-# This decorator catches every text message sent to your bot
 @bot.message_handler(func=lambda message: True)
 def handle_telegram_message(message):
-    
-    # Show the "typing..." status indicator in the Telegram app
     bot.send_chat_action(message.chat.id, 'typing')
-    
     try:
-        # Pass the Telegram message into our existing RAG Agent
         response = chat.send_message(message.text)
-        
-        # Send the agent's answer back to the Telegram chat using Markdown
         bot.reply_to(message, response.text, parse_mode="Markdown")
-        
     except Exception as e:
         bot.reply_to(message, "Sorry, the referee encountered an error reading the rules.")
-        print(f"Error: {e}")
+        print(f"Error Caught: {e}")
 
 # ---------------------------------------------------------
 # 6. CLOUD DEPLOYMENT: Keep-Alive Server
@@ -134,14 +129,10 @@ def home():
     return "Referee Bot is awake and monitoring the game!"
 
 def run_server():
-    # Bind to the port Render gives us
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# Start the web server in a background thread
 server_thread = threading.Thread(target=run_server)
 server_thread.start()
 
-# Keep the Telegram polling loop running on the main thread
-bot.infinity_polling()
-    
+bot.infinity_polling(skip_pending=True)
