@@ -111,10 +111,18 @@ print("Connecting to Telegram...")
 
 @bot.message_handler(func=lambda message: True)
 def handle_telegram_message(message):
+    print(f"\n[!] RECEIVED MESSAGE: {message.text}") # <--- Tracer 1
+    
     bot.send_chat_action(message.chat.id, 'typing')
+    
     try:
+        print("[!] Asking Gemini...") # <--- Tracer 2
         response = chat.send_message(message.text)
+        
+        print("[!] Gemini replied! Sending to Telegram...") # <--- Tracer 3
         bot.reply_to(message, response.text, parse_mode="Markdown")
+        print("[!] Success!")
+        
     except Exception as e:
         bot.reply_to(message, "Sorry, the referee encountered an error reading the rules.")
         print(f"Error Caught: {e}")
