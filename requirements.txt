@@ -2,5 +2,4 @@ pyTelegramBotAPI
 flask
 chromadb
 PyPDF2
-google-genai
-google-generativeai
+openai
