@@ -120,7 +120,7 @@ def handle_telegram_message(message):
         response = chat.send_message(message.text)
         
         print("[!] Gemini replied! Sending to Telegram...") # <--- Tracer 3
-        bot.reply_to(message, response.text, parse_mode="Markdown")
+        bot.reply_to(message, response.text)
         print("[!] Success!")
         
     except Exception as e:
