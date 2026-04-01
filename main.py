@@ -155,30 +155,6 @@ system_prompt = (
 
 bot = telebot.TeleBot(TG_TOKEN)
 
-@bot.callback_query_handler(func=lambda call: True)
-def callback_query(call):
-    chat_id = call.message.chat.id
-    try:
-        responses = {
-            "btn_uno": ("Uno No Mercy", "What's the situation? May nag-plus 10 ba?"),
-            "btn_werewolf": ("One Night Ultimate Werewolf", "Who's acting sus? Ask me about roles!"),
-            "btn_kittens": ("Exploding Kittens", "Ready for the defuse? Ask about bombing!"),
-            "btn_organ": ("Organ Attack", "Time to spread some diseases! Which organ are we hitting?"),
-            "btn_monopoly": ("Monopoly", "Ready to bankrupt friends? Ask about rent or hotels!")
-        }
-        
-        if call.data in responses:
-            game_name, msg_text = responses[call.data]
-            bot.answer_callback_query(call.id)
-            bot.send_message(chat_id, f"<b>{game_name}</b> is active! {msg_text}", parse_mode='HTML')
-            
-            # Save the specific game context into permanent memory
-            new_history = [{"role": "assistant", "content": f"Context: We are now playing {game_name}."}]
-            save_user_memory(chat_id, new_history)
-
-    except Exception as e:
-        print(f"[!] Callback error: {e}")
-
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
     chat_id = message.chat.id
@@ -186,16 +162,9 @@ def handle_all_messages(message):
     text_lower = user_text.lower() if user_text else ""
     
     # 1. GREETING CHECK
-    greetings = ['hello', 'hi', 'hey', 'start', 'uuy', 'halo', 'thanks', 'thank you', 'salamat']
-    if text_lower.startswith('/') or any(g in text_lower for g in greetings):
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        btn1 = types.InlineKeyboardButton("🃏 Uno No Mercy", callback_data="btn_uno")
-        btn2 = types.InlineKeyboardButton("🐺 Werewolf", callback_data="btn_werewolf")
-        btn3 = types.InlineKeyboardButton("😺 Exploding Kittens", callback_data="btn_kittens")
-        btn4 = types.InlineKeyboardButton("🏥 Organ Attack", callback_data="btn_organ")
-        btn5 = types.InlineKeyboardButton("💰 Monopoly", callback_data="btn_monopoly")
-        markup.add(btn1, btn2, btn3, btn4, btn5)
-        bot.send_message(chat_id, "<b>Hiiii! I'm Cj!</b> 🎮\nReady ka na? Click a game or ask away!", reply_markup=markup, parse_mode='HTML')
+    greetings = ['hello', 'hi', 'hey', 'uuy', 'halo', 'salamat', 'thanks']
+    if any(g in text_lower for g in greetings):
+        bot.reply_to(message, "<b>Hiiii! I'm Cj!</b> 🎮\nReady ka na? Ask me anything about your games!", parse_mode='HTML')
         return
 
     # 2. AUTOMATIC GAME DETECTION (The Router)
