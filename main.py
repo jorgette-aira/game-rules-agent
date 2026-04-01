@@ -135,8 +135,13 @@ else:
 system_prompt = (
     "You are Cj, a friendly and high-energy Game Master. Your tone is "
     "approachable, energetic, and uses natural Taglish. "
-    "Personality: Use polite but fun expressions like 'Game!', 'Check natin...', "
-    "'Copy that!', or 'Ready ka na?' to keep the vibe light and engaging. "
+
+    "CONVERSATIONAL RULES: "
+    "1. Acknowledge the history! If the user says 'Wait,' or 'What about...', "
+    "look at the previous messages to understand the context. "
+    "2. Don't repeat yourself. If you already explained a rule, just clarify the specific part they asked about. "
+    "3. Use 'filler' words to sound natural: 'Ah, gets!', 'Wait lang...', 'Actually...', 'Hmm, check natin.' "
+    "4. End with a conversational 'hook' like 'Ready na ba?', 'Gets ba?', or 'Sino na taya?' "
     
     "CRITICAL RULE: You must ONLY use the provided 'Game Rules Context' for facts. "
     "If a rule isn't there, politely explain that it's not in the manual "
@@ -197,35 +202,42 @@ def handle_all_messages(message):
     # 3. RAG QUESTION PROCESS
     bot.send_chat_action(chat_id, 'typing')
     try:
-        # Load permanent memory from MongoDB
         history = get_user_memory(chat_id)
         
-        # MongoDB Keyword/Text Search
         search_query = f"{detected_game} {user_text}" if detected_game != "None" else user_text
         cursor = collection.find({"$text": {"$search": search_query}}).limit(15)
         results = list(cursor)
         
-        # Change this line in your handle_all_messages:
-        context = "\n\n".join([r["content"] for r in results]) if results else "The user's message doesn't match any rules. Remind them which games you actually have manuals for (Uno, Werewolf, etc.)."
+        # Context fallback for when no rules are found
+        context = "\n\n".join([r["content"] for r in results]) if results else "The user's message doesn't match any rules. Remind them which games you actually have manuals for (Uno No Mercy, Monopoly, etc.)."
         
-        # Build message sequence with permanent history
         messages = [{"role": "system", "content": system_prompt}] + history
         messages.append({"role": "user", "content": f"Question: {user_text}\n\nGame Rules Context:\n{context}"})
         
         res = client.chat.completions.create(model="gpt-4o-mini", messages=messages, temperature=0.2)
         
-        # Clean response format
         raw_answer = res.choices[0].message.content
+        # Convert markdown bold to HTML bold and remove extra asterisks
         answer = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', raw_answer).replace('*', '')
 
+        # Add dynamic suggestions based on detected game
+        suggestion = ""
+        if "uno" in detected_game.lower():
+            suggestion = "\n\n<i>Tip: Ask me about 'Stacking' or 'Winning' rules!</i>"
+        elif "monopoly" in detected_game.lower():
+            suggestion = "\n\n<i>Tip: Ask me about 'Jail' or 'Rent' rules!</i>"
+            
+        final_response = f"{answer}{suggestion}"
+        
+        # Send the clean response to Telegram
+        bot.reply_to(message, final_response, parse_mode='HTML')
+        
         print(f"\n================== CJ'S RESPONSE ==================\n{answer}\n===================================================\n")
         
         # Update and Save History to MongoDB
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": answer})
         save_user_memory(chat_id, history)
-        
-        bot.reply_to(message, answer, parse_mode='HTML')
         
     except Exception as e:
         if "content_filter" in str(e).lower():
