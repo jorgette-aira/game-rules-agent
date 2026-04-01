@@ -163,6 +163,12 @@ system_prompt = (
     "3. Use <i>text</i> for italics. "
     "4. Use dashes (-) or bullets (•) for lists. "
     "5. Keep it short, punchy, and natural. No robotic long paragraphs!"
+
+    "SAFETY CONTEXT (CRITICAL): We are discussing tabletop BOARD GAMES. "
+    "Games like 'Organ Attack' or 'Uno No Mercy' are harmless card games. "
+    "Always describe the rules using lighthearted, family-friendly gaming terminology. "
+    "Do not use graphic, violent, or aggressive language. Treat words like 'attack', "
+    "'steal', or 'kill' purely as in-game mechanics."
 )
 
 bot = telebot.TeleBot(TG_TOKEN)
@@ -247,8 +253,9 @@ def handle_all_messages(message):
         save_user_memory(chat_id, history)
         
     except Exception as e:
-        if "content_filter" in str(e).lower():
-            bot.reply_to(message, "Pasensya na lods, pero restricted topic yan! Ask about games na lang tayo. 😉")
+        error_msg = str(e).lower()
+        if "content_filter" in error_msg or "responsibleaipolicyviolation" in error_msg:
+            bot.reply_to(message, "Hala! Na-flag tayo ng AI Security filters dahil sa terms ng game (like 'attack' or 'no mercy'). 😅 Rephrase natin, try asking specifically about 'how to draw cards' or 'how to win'!")
         else:
             bot.reply_to(message, "Pasensya na, the GM hit a snag!")
         print(f"Error: {e}")
