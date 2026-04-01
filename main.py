@@ -30,12 +30,32 @@ client = OpenAI(
 mongo_client = pymongo.MongoClient(MONGO_URI, tlsCAFile=certifi.where())
 db = mongo_client["game_master_db"]
 collection = db["game_rules"]
+sessions_col = db["sessions"]  # Permanent Memory Collection
 
 # Create a text index in MongoDB for faster searching (Run this once)
 collection.create_index([("content", "text")])
 
 # ---------------------------------------------------------
-# 2. OPENAI VISION (OCR)
+# 2. MEMORY HELPER FUNCTIONS
+# ---------------------------------------------------------
+def get_user_memory(chat_id):
+    """Retrieve chat history from MongoDB."""
+    user_data = sessions_col.find_one({"chat_id": chat_id})
+    if user_data:
+        return user_data.get("history", [])
+    return []
+
+def save_user_memory(chat_id, history):
+    """Save the last 10 messages of history to MongoDB."""
+    limited_history = history[-10:]
+    sessions_col.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"history": limited_history}},
+        upsert=True
+    )
+
+# ---------------------------------------------------------
+# 3. OPENAI VISION (OCR)
 # ---------------------------------------------------------
 def extract_text_with_openai_vision(pdf_path):
     print(f"\n[!] Engaging OpenAI Vision for {pdf_path}...")
@@ -65,7 +85,7 @@ def extract_text_with_openai_vision(pdf_path):
     return full_text
 
 # ---------------------------------------------------------
-# 3. CLOUD DATA INGESTION
+# 4. CLOUD DATA INGESTION
 # ---------------------------------------------------------
 def load_pdf_to_db(pdf_path: str):
     print(f"Cloud Ingesting {pdf_path}...")
@@ -101,7 +121,6 @@ def load_pdf_to_db(pdf_path: str):
         collection.insert_many(docs_to_insert)
         print(f"Successfully uploaded {len(docs_to_insert)} chunks for {game_name} to the cloud!\n")
 
-# Check if Cloud DB is empty
 if collection.count_documents({}) == 0:
     print("\n[!] Cloud Database is empty. Scanning rulebooks...")
     pdf_files = glob.glob("rulebooks/*.pdf")
@@ -111,14 +130,13 @@ else:
     print(f"\n[!] Cloud Brain active! Found {collection.count_documents({})} rule chunks.")
 
 # ---------------------------------------------------------
-# 4. CHAT AGENT SETUP
+# 5. CHAT AGENT SETUP
 # ---------------------------------------------------------
 system_prompt = (
     "You are Cj, a friendly and high-energy Game Master. Your tone is "
     "approachable, energetic, and uses natural Taglish. "
     "Personality: Use polite but fun expressions like 'Game!', 'Check natin...', "
     "'Copy that!', or 'Ready ka na?' to keep the vibe light and engaging. "
-    "to make it feel like a real conversation. "
     
     "CRITICAL RULE: You must ONLY use the provided 'Game Rules Context' for facts. "
     "If a rule isn't there, politely explain that it's not in the manual "
@@ -136,8 +154,6 @@ system_prompt = (
 )
 
 bot = telebot.TeleBot(TG_TOKEN)
-user_memory = {}
-MAX_HISTORY = 4
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
@@ -155,7 +171,11 @@ def callback_query(call):
             game_name, msg_text = responses[call.data]
             bot.answer_callback_query(call.id)
             bot.send_message(chat_id, f"<b>{game_name}</b> is active! {msg_text}", parse_mode='HTML')
-            user_memory[chat_id] = [{"role": "assistant", "content": f"Context: We are now playing {game_name}."}]
+            
+            # Save the specific game context into permanent memory
+            new_history = [{"role": "assistant", "content": f"Context: We are now playing {game_name}."}]
+            save_user_memory(chat_id, new_history)
+
     except Exception as e:
         print(f"[!] Callback error: {e}")
 
@@ -198,8 +218,9 @@ def handle_all_messages(message):
 
         if detected_game != "None":
             print(f"--- Detected Game: {detected_game} ---")
-            if chat_id not in user_memory: user_memory[chat_id] = []
-            user_memory[chat_id].append({"role": "assistant", "content": f"Context: The user is asking about {detected_game}."})
+            current_history = get_user_memory(chat_id)
+            current_history.append({"role": "assistant", "content": f"Context: The user is asking about {detected_game}."})
+            save_user_memory(chat_id, current_history)
             
     except Exception as e:
         print(f"Router Error (Handled): {e}")
@@ -207,33 +228,38 @@ def handle_all_messages(message):
     # 3. RAG QUESTION PROCESS
     bot.send_chat_action(chat_id, 'typing')
     try:
+        # Load permanent memory from MongoDB
+        history = get_user_memory(chat_id)
+        
         # MongoDB Keyword/Text Search
         search_query = f"{detected_game} {user_text}" if detected_game != "None" else user_text
-        
-        # Searching MongoDB using Text Index
         cursor = collection.find({"$text": {"$search": search_query}}).limit(15)
         results = list(cursor)
         
         context = "\n\n".join([r["content"] for r in results]) if results else "No rules found."
         
-        if chat_id not in user_memory: user_memory[chat_id] = []
-        messages = [{"role": "system", "content": system_prompt}] + user_memory[chat_id]
+        # Build message sequence with permanent history
+        messages = [{"role": "system", "content": system_prompt}] + history
         messages.append({"role": "user", "content": f"Question: {user_text}\n\nGame Rules Context:\n{context}"})
         
         res = client.chat.completions.create(model="gpt-4o-mini", messages=messages, temperature=0.2)
-        answer = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', res.choices[0].message.content).replace('*', '')
+        
+        # Clean response format
+        raw_answer = res.choices[0].message.content
+        answer = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', raw_answer).replace('*', '')
 
         print(f"\n================== CJ'S RESPONSE ==================\n{answer}\n===================================================\n")
         
-        user_memory[chat_id].append({"role": "user", "content": user_text})
-        user_memory[chat_id].append({"role": "assistant", "content": answer})
-        user_memory[chat_id] = user_memory[chat_id][-MAX_HISTORY:]
+        # Update and Save History to MongoDB
+        history.append({"role": "user", "content": user_text})
+        history.append({"role": "assistant", "content": answer})
+        save_user_memory(chat_id, history)
         
         bot.reply_to(message, answer, parse_mode='HTML')
         
     except Exception as e:
         if "content_filter" in str(e).lower():
-            bot.reply_to(message, "Uy lods, bawal yan! AI says too spicy yung topic. Try mo rephrase! 😉")
+            bot.reply_to(message, "Pasensya na lods, pero restricted topic yan! Ask about games na lang tayo. 😉")
         else:
             bot.reply_to(message, "Pasensya na, the GM hit a snag!")
         print(f"Error: {e}")
