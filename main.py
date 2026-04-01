@@ -205,7 +205,8 @@ def handle_all_messages(message):
         cursor = collection.find({"$text": {"$search": search_query}}).limit(15)
         results = list(cursor)
         
-        context = "\n\n".join([r["content"] for r in results]) if results else "No rules found."
+        # Change this line in your handle_all_messages:
+        context = "\n\n".join([r["content"] for r in results]) if results else "The user's message doesn't match any rules. Remind them which games you actually have manuals for (Uno, Werewolf, etc.)."
         
         # Build message sequence with permanent history
         messages = [{"role": "system", "content": system_prompt}] + history
